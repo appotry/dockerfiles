@@ -1,7 +1,6 @@
 package sessdata
 
 import (
-	"crypto/md5"
 	"fmt"
 	"math/rand"
 	"net"
@@ -13,6 +12,8 @@ import (
 
 	"github.com/bjdgyc/anylink/base"
 	"github.com/bjdgyc/anylink/dbdata"
+	mapset "github.com/deckarep/golang-set"
+	atomic2 "go.uber.org/atomic"
 )
 
 var (
@@ -30,28 +31,32 @@ type ConnSession struct {
 	IpAddr              net.IP // 分配的ip地址
 	LocalIp             net.IP
 	MacHw               net.HardwareAddr // 客户端mac地址,从Session取出
+	Username            string
 	RemoteAddr          string
 	Mtu                 int
 	IfName              string
 	Client              string // 客户端  mobile pc
+	UserAgent           string // 客户端信息
+	UserLogoutCode      uint8  // 用户/客户端主动登出
 	CstpDpd             int
 	Group               *dbdata.Group
 	Limit               *LimitRater
-	BandwidthUp         uint32 // 使用上行带宽 Byte
-	BandwidthDown       uint32 // 使用下行带宽 Byte
-	BandwidthUpPeriod   uint32 // 前一周期的总量
-	BandwidthDownPeriod uint32
-	BandwidthUpAll      uint64 // 使用上行带宽总量
-	BandwidthDownAll    uint64 // 使用下行带宽总量
+	BandwidthUp         atomic2.Uint32 // 使用上行带宽 Byte
+	BandwidthDown       atomic2.Uint32 // 使用下行带宽 Byte
+	BandwidthUpPeriod   atomic2.Uint32 // 前一周期的总量
+	BandwidthDownPeriod atomic2.Uint32
+	BandwidthUpAll      atomic2.Uint64 // 使用上行带宽总量
+	BandwidthDownAll    atomic2.Uint64 // 使用下行带宽总量
 	closeOnce           sync.Once
 	CloseChan           chan struct{}
 	PayloadIn           chan *Payload
-	PayloadOutCstp      chan *Payload    // Cstp的数据
-	PayloadOutDtls      chan *Payload    // Dtls的数据
-	IpAuditMap          map[string]int64 // 审计的ip数据
-
+	PayloadOutCstp      chan *Payload // Cstp的数据
+	PayloadOutDtls      chan *Payload // Dtls的数据
 	// dSess *DtlsSession
 	dSess *atomic.Value
+	// compress
+	CstpPickCmp CmpEncoding
+	DtlsPickCmp CmpEncoding
 }
 
 type DtlsSession struct {
@@ -62,16 +67,22 @@ type DtlsSession struct {
 }
 
 type Session struct {
-	mux            sync.RWMutex
-	Sid            string // auth返回的 session-id
-	Token          string // session信息的唯一token
-	DtlsSid        string // dtls协议的 session_id
-	MacAddr        string // 客户端mac地址
-	UniqueIdGlobal string // 客户端唯一标示
-	Username       string // 用户名
-	Group          string
-	AuthStep       string
-	AuthPass       string
+	mux             sync.RWMutex
+	Sid             string // auth返回的 session-id
+	Token           string // session信息的唯一token
+	DtlsSid         string // dtls协议的 session_id
+	MacAddr         string // 客户端mac地址
+	UniqueIdGlobal  string // 客户端唯一标示
+	MacHw           net.HardwareAddr
+	UniqueMac       bool   // 客户端获取到真实设备mac
+	Username        string // 用户名
+	Group           string
+	AuthStep        string
+	AuthPass        string
+	RemoteAddr      string
+	UserAgent       string
+	DeviceType      string
+	PlatformVersion string
 
 	LastLogin time.Time
 	IsActive  bool
@@ -93,20 +104,44 @@ func checkSession() {
 		timeout := time.Duration(base.Cfg.SessionTimeout) * time.Second
 		tick := time.NewTicker(time.Second * 60)
 		for range tick.C {
-			sessMux.Lock()
+			outToken := []string{}
+			sessMux.RLock()
 			t := time.Now()
 			for k, v := range sessions {
-				v.mux.Lock()
+				v.mux.RLock()
 				if !v.IsActive {
 					if t.Sub(v.LastLogin) > timeout {
-						delete(sessions, k)
+						outToken = append(outToken, k)
 					}
 				}
-				v.mux.Unlock()
+				v.mux.RUnlock()
 			}
-			sessMux.Unlock()
+			sessMux.RUnlock()
+
+			// 删除过期session
+			for _, v := range outToken {
+				CloseSess(v, dbdata.UserLogoutTimeout)
+			}
 		}
 	}()
+}
+
+// 状态为过期的用户踢下线
+func CloseUserLimittimeSession() {
+	s := mapset.NewSetFromSlice(dbdata.CheckUserlimittime())
+	limitTimeToken := []string{}
+	sessMux.RLock()
+	for _, v := range sessions {
+		v.mux.RLock()
+		if v.IsActive && s.Contains(v.Username) {
+			limitTimeToken = append(limitTimeToken, v.Token)
+		}
+		v.mux.RUnlock()
+	}
+	sessMux.RUnlock()
+	for _, v := range limitTimeToken {
+		CloseSess(v, dbdata.UserLogoutExpire)
+	}
 }
 
 func GenToken() string {
@@ -145,7 +180,9 @@ func (s *Session) NewConn() *ConnSession {
 	s.mux.RLock()
 	active := s.IsActive
 	macAddr := s.MacAddr
+	macHw := s.MacHw
 	username := s.Username
+	uniqueMac := s.UniqueMac
 	s.mux.RUnlock()
 	if active {
 		s.CSess.Close()
@@ -153,17 +190,10 @@ func (s *Session) NewConn() *ConnSession {
 
 	limit := LimitClient(username, false)
 	if !limit {
+		base.Warn("limit is full", username)
 		return nil
 	}
-	// 获取客户端mac地址
-	macHw, err := net.ParseMAC(macAddr)
-	if err != nil {
-		sum := md5.Sum([]byte(s.UniqueIdGlobal))
-		macHw = sum[0:5] // 5个byte
-		macHw = append([]byte{0x02}, macHw...)
-		macAddr = macHw.String()
-	}
-	ip := AcquireIp(username, macAddr)
+	ip := AcquireIp(username, macAddr, uniqueMac)
 	if ip == nil {
 		LimitClient(username, true)
 		return nil
@@ -171,7 +201,7 @@ func (s *Session) NewConn() *ConnSession {
 
 	// 查询group信息
 	group := &dbdata.Group{}
-	err = dbdata.One("Name", s.Group, group)
+	err := dbdata.One("Name", s.Group, group)
 	if err != nil {
 		base.Error(err)
 		return nil
@@ -180,6 +210,7 @@ func (s *Session) NewConn() *ConnSession {
 	cSess := &ConnSession{
 		Sess:           s,
 		MacHw:          macHw,
+		Username:       username,
 		IpAddr:         ip,
 		closeOnce:      sync.Once{},
 		CloseChan:      make(chan struct{}),
@@ -187,11 +218,6 @@ func (s *Session) NewConn() *ConnSession {
 		PayloadOutCstp: make(chan *Payload, 64),
 		PayloadOutDtls: make(chan *Payload, 64),
 		dSess:          &atomic.Value{},
-	}
-
-	// ip 审计
-	if base.Cfg.AuditInterval >= 0 {
-		cSess.IpAuditMap = make(map[string]int64, 512)
 	}
 
 	dSess := &DtlsSession{
@@ -226,8 +252,14 @@ func (cs *ConnSession) Close() {
 		cs.Sess.LastLogin = time.Now()
 		cs.Sess.CSess = nil
 
+		dSess := cs.GetDtlsSession()
+		if dSess != nil {
+			dSess.Close()
+		}
+
 		ReleaseIp(cs.IpAddr, cs.Sess.MacAddr)
-		LimitClient(cs.Sess.Username, true)
+		LimitClient(cs.Username, true)
+		AddUserActLog(cs)
 	})
 }
 
@@ -269,7 +301,7 @@ func (cs *ConnSession) GetDtlsSession() *DtlsSession {
 	return nil
 }
 
-const BandwidthPeriodSec = 2 // 流量速率统计周期(秒)
+const BandwidthPeriodSec = 10 // 流量速率统计周期(秒)
 
 func (cs *ConnSession) ratePeriod() {
 	tick := time.NewTicker(time.Second * BandwidthPeriodSec)
@@ -283,20 +315,23 @@ func (cs *ConnSession) ratePeriod() {
 		}
 
 		// 实时流量清零
-		rtUp := atomic.SwapUint32(&cs.BandwidthUp, 0)
-		rtDown := atomic.SwapUint32(&cs.BandwidthDown, 0)
+		rtUp := cs.BandwidthUp.Swap(0)
+		rtDown := cs.BandwidthDown.Swap(0)
 		// 设置上一周期每秒的流量
-		atomic.SwapUint32(&cs.BandwidthUpPeriod, rtUp/BandwidthPeriodSec)
-		atomic.SwapUint32(&cs.BandwidthDownPeriod, rtDown/BandwidthPeriodSec)
+		cs.BandwidthUpPeriod.Swap(rtUp / BandwidthPeriodSec)
+		cs.BandwidthDownPeriod.Swap(rtDown / BandwidthPeriodSec)
 		// 累加所有流量
-		atomic.AddUint64(&cs.BandwidthUpAll, uint64(rtUp))
-		atomic.AddUint64(&cs.BandwidthDownAll, uint64(rtDown))
+		cs.BandwidthUpAll.Add(uint64(rtUp))
+		cs.BandwidthDownAll.Add(uint64(rtDown))
 	}
 }
 
-const MaxMtu = 1460
+var MaxMtu = 1460
 
 func (cs *ConnSession) SetMtu(mtu string) {
+	if base.Cfg.Mtu > 0 {
+		MaxMtu = base.Cfg.Mtu
+	}
 	cs.Mtu = MaxMtu
 
 	mi, err := strconv.Atoi(mtu)
@@ -317,15 +352,39 @@ func (cs *ConnSession) SetIfName(name string) {
 
 func (cs *ConnSession) RateLimit(byt int, isUp bool) error {
 	if isUp {
-		atomic.AddUint32(&cs.BandwidthUp, uint32(byt))
+		cs.BandwidthUp.Add(uint32(byt))
 		return nil
 	}
 	// 只对下行速率限制
-	atomic.AddUint32(&cs.BandwidthDown, uint32(byt))
+	cs.BandwidthDown.Add(uint32(byt))
 	if cs.Limit == nil {
 		return nil
 	}
 	return cs.Limit.Wait(byt)
+}
+
+func (cs *ConnSession) SetPickCmp(cate, encoding string) (string, bool) {
+	var cmpName string
+	if !base.Cfg.Compression {
+		return cmpName, false
+	}
+	var cmp CmpEncoding
+	switch {
+	// case strings.Contains(encoding, "oc-lz4"):
+	// 	cmpName = "oc-lz4"
+	// 	cmp = Lz4Cmp{}
+	case strings.Contains(encoding, "lzs"):
+		cmpName = "lzs"
+		cmp = LzsgoCmp{}
+	default:
+		return cmpName, false
+	}
+	if cate == "cstp" {
+		cs.CstpPickCmp = cmp
+	} else {
+		cs.DtlsPickCmp = cmp
+	}
+	return cmpName, true
 }
 
 func SToken2Sess(stoken string) *Session {
@@ -347,6 +406,20 @@ func Dtls2Sess(did string) *Session {
 	defer sessMux.RUnlock()
 	token := dtlsIds[did]
 	return sessions[token]
+}
+
+func Dtls2CSess(did string) *ConnSession {
+	sessMux.RLock()
+	defer sessMux.RUnlock()
+	token := dtlsIds[did]
+	sess := sessions[token]
+	if sess == nil {
+		return nil
+	}
+
+	sess.mux.RLock()
+	defer sess.mux.RUnlock()
+	return sess.CSess
 }
 
 func Dtls2MasterSecret(did string) string {
@@ -371,7 +444,7 @@ func DelSess(token string) {
 	// sessions.Delete(token)
 }
 
-func CloseSess(token string) {
+func CloseSess(token string, code ...uint8) {
 	sessMux.Lock()
 	defer sessMux.Unlock()
 	sess, ok := sessions[token]
@@ -380,7 +453,16 @@ func CloseSess(token string) {
 	}
 
 	delete(sessions, token)
-	sess.CSess.Close()
+	delete(dtlsIds, sess.DtlsSid)
+
+	if sess.CSess != nil {
+		if len(code) > 0 {
+			sess.CSess.UserLogoutCode = code[0]
+		}
+		sess.CSess.Close()
+		return
+	}
+	AddUserActLogBySess(sess)
 }
 
 func CloseCSess(token string) {
@@ -391,14 +473,42 @@ func CloseCSess(token string) {
 		return
 	}
 
-	sess.CSess.Close()
+	if sess.CSess != nil {
+		sess.CSess.Close()
+	}
 }
 
 func DelSessByStoken(stoken string) {
 	stoken = strings.TrimSpace(stoken)
 	sarr := strings.Split(stoken, "@")
 	token := sarr[1]
-	sessMux.Lock()
-	delete(sessions, token)
-	sessMux.Unlock()
+	CloseSess(token, dbdata.UserLogoutBanner)
+}
+
+func AddUserActLog(cs *ConnSession) {
+	ua := dbdata.UserActLog{
+		Username:        cs.Sess.Username,
+		GroupName:       cs.Sess.Group,
+		IpAddr:          cs.IpAddr.String(),
+		RemoteAddr:      cs.RemoteAddr,
+		DeviceType:      cs.Sess.DeviceType,
+		PlatformVersion: cs.Sess.PlatformVersion,
+		Status:          dbdata.UserLogout,
+	}
+	ua.Info = dbdata.UserActLogIns.GetInfoOpsById(cs.UserLogoutCode)
+	dbdata.UserActLogIns.Add(ua, cs.UserAgent)
+}
+
+func AddUserActLogBySess(sess *Session) {
+	ua := dbdata.UserActLog{
+		Username:        sess.Username,
+		GroupName:       sess.Group,
+		IpAddr:          "",
+		RemoteAddr:      sess.RemoteAddr,
+		DeviceType:      sess.DeviceType,
+		PlatformVersion: sess.PlatformVersion,
+		Status:          dbdata.UserLogout,
+	}
+	ua.Info = dbdata.UserActLogIns.GetInfoOpsById(dbdata.UserLogoutBanner)
+	dbdata.UserActLogIns.Add(ua, sess.UserAgent)
 }

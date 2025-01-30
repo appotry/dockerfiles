@@ -1,5 +1,4 @@
-PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin
-export PATH
+#!/bin/bash
 
 # fonts color
 Green="\033[32m"
@@ -17,7 +16,7 @@ acme (){
     cat /conf/account.conf >/acme.sh/account.conf
     /root/.acme.sh/acme.sh --upgrade
     /root/.acme.sh/acme.sh --register-account -m your@domain.com --server zerossl
-    /root/.acme.sh/acme.sh --issue $* --dns ${DNSAPI} -d ${DOMAIN} -d \*.${DOMAIN}
+    /root/.acme.sh/acme.sh --issue $* --keylength 2048 --dns ${DNSAPI} -d ${DOMAIN} -d \*.${DOMAIN}
     rm -rf /acme.sh/ca
     rm -rf /acme.sh/http.header
     if [ -f /acme.sh/${DOMAIN}/fullchain.cer ] && [ -f /acme.sh/${DOMAIN}/${DOMAIN}.key ]; then

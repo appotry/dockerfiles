@@ -1,7 +1,7 @@
 FROM alpine
-MAINTAINER Stille <stille@ioiox.com>
+LABEL maintainer="Stille <stille@ioiox.com>"
 
-ENV VERSION 11.3
+ENV VERSION 14.7
 
 RUN set -xe && \
     UNAME=$(uname -m) && if [ "$UNAME" = "x86_64" ]; then export PLATFORM=amd64 ; else export PLATFORM=arm64-v8 ; fi && \

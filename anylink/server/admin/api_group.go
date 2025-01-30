@@ -2,7 +2,7 @@ package admin
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -47,6 +47,16 @@ func GroupNames(w http.ResponseWriter, r *http.Request) {
 	RespSucess(w, data)
 }
 
+func GroupNamesIds(w http.ResponseWriter, r *http.Request) {
+	var names = dbdata.GetGroupNamesIds()
+	data := map[string]interface{}{
+		"count":     len(names),
+		"page_size": 0,
+		"datas":     names,
+	}
+	RespSucess(w, data)
+}
+
 func GroupDetail(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	idS := r.FormValue("id")
@@ -62,12 +72,14 @@ func GroupDetail(w http.ResponseWriter, r *http.Request) {
 		RespError(w, RespInternalErr, err)
 		return
 	}
-
+	if len(data.Auth) == 0 {
+		data.Auth["type"] = "local"
+	}
 	RespSucess(w, data)
 }
 
 func GroupSet(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		RespError(w, RespInternalErr, err)
 		return
@@ -105,4 +117,31 @@ func GroupDel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	RespSucess(w, nil)
+}
+
+func GroupAuthLogin(w http.ResponseWriter, r *http.Request) {
+	type AuthLoginData struct {
+		Name string                 `json:"name"`
+		Pwd  string                 `json:"pwd"`
+		Auth map[string]interface{} `json:"auth"`
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		RespError(w, RespInternalErr, err)
+		return
+	}
+	defer r.Body.Close()
+	v := &AuthLoginData{}
+	err = json.Unmarshal(body, &v)
+	if err != nil {
+		RespError(w, RespInternalErr, err)
+		return
+	}
+	err = dbdata.GroupAuthLogin(v.Name, v.Pwd, v.Auth)
+	if err != nil {
+		RespError(w, RespInternalErr, err)
+		return
+	}
+	RespSucess(w, "ok")
 }

@@ -8,6 +8,28 @@ Docker [stilleshan/zfile](https://hub.docker.com/r/stilleshan/zfile)
 基于 [zhaojun1998/zfile](https://github.com/zhaojun1998/zfile) 项目的 docker 镜像.
 
 ## 更新
+- **2023-03-05** 更新`4.1.4`版 docker 镜像.
+- **2022-11-27** 更新`4.1.3`版 docker 镜像.
+- **2022-09-21** 更新`4.1.2`版 docker 镜像.
+- **2022-08-30** 更新`4.1.1`版 docker 镜像.
+- **2022-08-28** 更新`4.1.0`版 docker 镜像.
+- **2022-08-17** 更新`4.0.10`版 docker 镜像.
+- **2022-08-12** 更新`4.0.9`版 docker 镜像.
+- **2022-08-07** 更新`4.0.8`版 docker 镜像.
+- **2022-07-31** 更新`4.0.7`版 docker 镜像.
+- **2022-07-28** 更新`4.0.6`版 docker 镜像.
+- **2022-07-15** 更新`4.0.5`版 docker 镜像.
+- **2022-07-14** 更新`4.0.4`版 docker 镜像.
+- **2022-07-13** 更新`4.0.3`版 docker 镜像.
+- **2022-07-12** 更新`4.0.2`版 docker 镜像.
+- **2022-07-11** 更新`4.0.1`版 docker 镜像.
+- **2022-07-10** 更新`4.0.0`版 docker 镜像.
+- **2022-06-17** 更新`3.2.6`版 docker 镜像.
+- **2022-05-16** 更新`3.2.5`版 docker 镜像.
+- **2022-05-04** 更新`3.2.4`版 docker 镜像.
+- **2022-04-13** 更新`3.2.3`版 docker 镜像.
+- **2022-04-02** 更新`3.2.2`版 docker 镜像.
+- **2022-02-02** 更新`3.2.1`版 docker 镜像.
 - **2021-09-19** 更新`3.2`版 docker 镜像.
 - **2021-06-11** 更新`3.1`版 docker 镜像,新增同时支持 X86 和 ARM 架构.
 
@@ -19,7 +41,7 @@ docker run -d \
     --name=zfile \
     --restart=always \
     -p 8080:8080 \
-    -v /root/zfile/conf:/root/.zfile \
+    -v /root/zfile/conf:/root/.zfile-v4 \
     -v /root/zfile/data:/root/zfile/data \
     stilleshan/zfile
 ```
@@ -37,11 +59,11 @@ docker-compose up -d
 访问以下安装地址进行安装配置.如使用本地存储,路径请填写`/root/zfile/data`.同时可以配置反向代理使用域名访问.
 > 可以自行修改挂载命令来配置本地存储路径.
 ```shell
-http://IP:8080/#/install
+http://IP:8080/install
 # 安装地址
-http://IP:8080/#/main
+http://IP:8080/
 # 前端页面
-http://IP:8080/#/admin
+http://IP:8080/admin
 # 管理页面
 ```
 

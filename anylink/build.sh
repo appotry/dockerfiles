@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/bin/bash
 
 set -x
 function RETVAL() {
@@ -12,13 +12,21 @@ function RETVAL() {
 #当前目录
 cpath=$(pwd)
 
+ver=`cat server/base/app_ver.go | grep APP_VER | awk '{print $3}' | sed 's/"//g'`
+echo "当前版本 $ver"
+
 echo "编译前端项目"
 cd $cpath/web
 #国内可替换源加快速度
 #npx browserslist@latest --update-db
-npm install --registry=https://registry.npm.taobao.org
+#npm install --registry=https://registry.npm.taobao.org
 #npm install
-npm run build
+#npm run build
+
+yarn install --registry=https://registry.npmmirror.com
+yarn run build
+
+
 RETVAL $?
 
 echo "编译二进制文件"
@@ -27,6 +35,7 @@ rm -rf ui
 cp -rf $cpath/web/ui .
 #国内可替换源加快速度
 export GOPROXY=https://goproxy.io
+go mod tidy
 go build -v -o anylink -ldflags "-X main.CommitId=$(git rev-parse HEAD)"
 RETVAL $?
 
@@ -38,7 +47,7 @@ rm -rf $deploy ${deploy}.tar.gz
 mkdir $deploy
 
 cp -r server/anylink $deploy
-cp -r server/bridge-init.sh $deploy
+#cp -r server/bridge-init.sh $deploy
 cp -r server/conf $deploy
 
 cp -r systemd $deploy

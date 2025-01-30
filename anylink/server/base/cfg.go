@@ -49,6 +49,7 @@ type ServerConfig struct {
 	Issuer         string `json:"issuer"`
 	AdminUser      string `json:"admin_user"`
 	AdminPass      string `json:"admin_pass"`
+	AdminOtp       string `json:"admin_otp"`
 	JwtSecret      string `json:"jwt_secret"`
 
 	LinkMode    string `json:"link_mode"`    // tun tap macvtap ipvtap
@@ -66,10 +67,19 @@ type ServerConfig struct {
 	CstpDpd         int    `json:"cstp_dpd"`       // Dead peer detection in seconds
 	MobileKeepalive int    `json:"mobile_keepalive"`
 	MobileDpd       int    `json:"mobile_dpd"`
+	Mtu             int    `json:"mtu"`
+	DefaultDomain   string `json:"default_domain"`
 
 	SessionTimeout int `json:"session_timeout"` // in seconds
 	// AuthTimeout    int `json:"auth_timeout"`    // in seconds
 	AuditInterval int `json:"audit_interval"` // in seconds
+
+	ShowSQL         bool `json:"show_sql"` // bool
+	IptablesNat     bool `json:"iptables_nat"`
+	Compression     bool `json:"compression"`       // bool
+	NoCompressLimit int  `json:"no_compress_limit"` // int
+
+	DisplayError bool `json:"display_error"`
 }
 
 func initServerCfg() {

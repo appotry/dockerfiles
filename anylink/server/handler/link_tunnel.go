@@ -6,10 +6,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"strings"
+	"text/template"
 
 	"github.com/bjdgyc/anylink/base"
+	"github.com/bjdgyc/anylink/dbdata"
 	"github.com/bjdgyc/anylink/sessdata"
 )
 
@@ -23,18 +26,19 @@ func init() {
 }
 
 func HttpSetHeader(w http.ResponseWriter, key string, value string) {
-   w.Header()[key] = []string{value}
+	w.Header()[key] = []string{value}
 }
 
 func HttpAddHeader(w http.ResponseWriter, key string, value string) {
-   w.Header()[key] = append(w.Header()[key], value)
+	w.Header()[key] = append(w.Header()[key], value)
 }
 
 func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 	// TODO 调试信息输出
-	// hd, _ := httputil.DumpRequest(r, true)
-	// fmt.Println("DumpRequest: ", string(hd))
-	// fmt.Println("LinkTunnel", r.RemoteAddr)
+	if base.GetLogLevel() == base.LogLevelTrace {
+		hd, _ := httputil.DumpRequest(r, true)
+		base.Trace("LinkTunnel: ", string(hd))
+	}
 
 	// 判断session-token的值
 	cookie, err := r.Cookie("webvpn")
@@ -67,6 +71,7 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 	cSess.SetMtu(cstpMtu)
 	cSess.MasterSecret = masterSecret
 	cSess.RemoteAddr = r.RemoteAddr
+	cSess.UserAgent = strings.ToLower(r.UserAgent())
 	cSess.LocalIp = net.ParseIP(localIp)
 	cstpKeepalive := base.Cfg.CstpKeepalive
 	cstpDpd := base.Cfg.CstpDpd
@@ -87,6 +92,14 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 
 	base.Debug(cSess.IpAddr, cSess.MacHw, sess.Username, mobile)
 
+	// 压缩
+	if cmpName, ok := cSess.SetPickCmp("cstp", r.Header.Get("X-Cstp-Accept-Encoding")); ok {
+		HttpSetHeader(w, "X-CSTP-Content-Encoding", cmpName)
+	}
+	if cmpName, ok := cSess.SetPickCmp("dtls", r.Header.Get("X-Dtls-Accept-Encoding")); ok {
+		HttpSetHeader(w, "X-DTLS-Content-Encoding", cmpName)
+	}
+
 	// 返回客户端数据
 	HttpSetHeader(w, "Server", fmt.Sprintf("%s %s", base.APP_NAME, base.APP_VER))
 	HttpSetHeader(w, "X-CSTP-Version", "1")
@@ -95,8 +108,14 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 	HttpSetHeader(w, "X-CSTP-Address", cSess.IpAddr.String())             // 分配的ip地址
 	HttpSetHeader(w, "X-CSTP-Netmask", sessdata.IpPool.Ipv4Mask.String()) // 子网掩码
 	HttpSetHeader(w, "X-CSTP-Hostname", hn)                               // 机器名称
-	//HttpSetHeader(w, "X-CSTP-Default-Domain", cSess.LocalIp)          
 	HttpSetHeader(w, "X-CSTP-Base-MTU", cstpBaseMtu)
+	// 要发布的默认域
+	if base.Cfg.DefaultDomain != "" {
+		HttpSetHeader(w, "X-CSTP-Default-Domain", base.Cfg.DefaultDomain)
+	}
+
+	// 设置用户策略
+	SetUserPolicy(cSess.Username, cSess.Group)
 
 	// 允许本地LAN访问vpn网络，必须放在路由的第一个
 	if cSess.Group.AllowLan {
@@ -108,7 +127,7 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	// 允许的路由
 	for _, v := range cSess.Group.RouteInclude {
-		if v.Val == "all" {
+		if v.Val == dbdata.All {
 			continue
 		}
 		HttpAddHeader(w, "X-CSTP-Split-Include", v.IpMask)
@@ -118,7 +137,7 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 		HttpAddHeader(w, "X-CSTP-Split-Exclude", v.IpMask)
 	}
 
-	HttpSetHeader(w, "X-CSTP-Lease-Duration", fmt.Sprintf("%d", base.Cfg.IpLease)) // ip地址租期
+	HttpSetHeader(w, "X-CSTP-Lease-Duration", "1209600") // ip地址租期
 	HttpSetHeader(w, "X-CSTP-Session-Timeout", "none")
 	HttpSetHeader(w, "X-CSTP-Session-Timeout-Alert-Interval", "60")
 	HttpSetHeader(w, "X-CSTP-Session-Timeout-Remaining", "none")
@@ -127,8 +146,10 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 	HttpSetHeader(w, "X-CSTP-Keep", "true")
 	HttpSetHeader(w, "X-CSTP-Tunnel-All-DNS", "false")
 
-	HttpSetHeader(w, "X-CSTP-Rekey-Time", "172800")
+	HttpSetHeader(w, "X-CSTP-Rekey-Time", "43200") // 172800
 	HttpSetHeader(w, "X-CSTP-Rekey-Method", "new-tunnel")
+	HttpSetHeader(w, "X-DTLS-Rekey-Time", "43200")
+	HttpSetHeader(w, "X-DTLS-Rekey-Method", "new-tunnel")
 
 	HttpSetHeader(w, "X-CSTP-DPD", fmt.Sprintf("%d", cstpDpd))
 	HttpSetHeader(w, "X-CSTP-Keepalive", fmt.Sprintf("%d", cstpKeepalive))
@@ -143,7 +164,6 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 	HttpSetHeader(w, "X-DTLS-Port", dtlsPort)
 	HttpSetHeader(w, "X-DTLS-DPD", fmt.Sprintf("%d", cstpDpd))
 	HttpSetHeader(w, "X-DTLS-Keepalive", fmt.Sprintf("%d", cstpKeepalive))
-	HttpSetHeader(w, "X-DTLS-Rekey-Time", "5400")
 	HttpSetHeader(w, "X-DTLS12-CipherSuite", "ECDHE-ECDSA-AES128-GCM-SHA256")
 
 	HttpSetHeader(w, "X-CSTP-License", "accept")
@@ -152,7 +172,11 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 	HttpSetHeader(w, "X-CSTP-Disable-Always-On-VPN", "false")
 	HttpSetHeader(w, "X-CSTP-Client-Bypass-Protocol", "false")
 	HttpSetHeader(w, "X-CSTP-TCP-Keepalive", "false")
-	// HttpSetHeader(w, "X-CSTP-Post-Auth-XML", ``)
+	// 设置域名拆分隧道（移动端不支持）
+	if mobile != "mobile" {
+		SetPostAuthXml(cSess.Group, w)
+	}
+
 	w.WriteHeader(http.StatusOK)
 
 	hClone := w.Header().Clone()
@@ -183,6 +207,47 @@ func LinkTunnel(w http.ResponseWriter, r *http.Request) {
 		base.Error(err)
 		return
 	}
+	dbdata.UserActLogIns.Add(dbdata.UserActLog{
+		Username:        sess.Username,
+		GroupName:       sess.Group,
+		IpAddr:          cSess.IpAddr.String(),
+		RemoteAddr:      cSess.RemoteAddr,
+		DeviceType:      sess.DeviceType,
+		PlatformVersion: sess.PlatformVersion,
+		Status:          dbdata.UserConnected,
+	}, cSess.UserAgent)
 
 	go LinkCstp(conn, bufRW, cSess)
+}
+
+// 设置域名拆分隧道
+func SetPostAuthXml(g *dbdata.Group, w http.ResponseWriter) error {
+	if g.DsExcludeDomains == "" && g.DsIncludeDomains == "" {
+		return nil
+	}
+	tmpl, err := template.New("post_auth_xml").Parse(ds_domains_xml)
+	if err != nil {
+		return err
+	}
+	var result bytes.Buffer
+	err = tmpl.Execute(&result, g)
+	if err != nil {
+		return err
+	}
+	HttpSetHeader(w, "X-CSTP-Post-Auth-XML", result.String())
+	return nil
+}
+
+// 设置用户策略, 覆盖Group的属性值
+func SetUserPolicy(username string, g *dbdata.Group) {
+	userPolicy := dbdata.GetPolicy(username)
+	if userPolicy.Id != 0 && userPolicy.Status == 1 {
+		base.Debug(username + " use UserPolicy")
+		g.AllowLan = userPolicy.AllowLan
+		g.ClientDns = userPolicy.ClientDns
+		g.RouteInclude = userPolicy.RouteInclude
+		g.RouteExclude = userPolicy.RouteExclude
+		g.DsExcludeDomains = userPolicy.DsExcludeDomains
+		g.DsIncludeDomains = userPolicy.DsIncludeDomains
+	}
 }

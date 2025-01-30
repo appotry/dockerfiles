@@ -1,6 +1,8 @@
 package dbdata
 
 import (
+	"time"
+
 	"github.com/bjdgyc/anylink/base"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
@@ -19,13 +21,19 @@ func GetXdb() *xorm.Engine {
 func initDb() {
 	var err error
 	xdb, err = xorm.NewEngine(base.Cfg.DbType, base.Cfg.DbSource)
-	// xdb.ShowSQL(true)
+	// 初始化xorm时区
+	xdb.DatabaseTZ = time.Local
+	xdb.TZLocation = time.Local
 	if err != nil {
 		base.Fatal(err)
 	}
 
+	if base.Cfg.ShowSQL {
+		xdb.ShowSQL(true)
+	}
+
 	// 初始化数据库
-	err = xdb.Sync2(&User{}, &Setting{}, &Group{}, &IpMap{}, &AccessAudit{})
+	err = xdb.Sync2(&User{}, &Setting{}, &Group{}, &IpMap{}, &AccessAudit{}, &Policy{}, &StatsNetwork{}, &StatsCpu{}, &StatsMem{}, &StatsOnline{}, &UserActLog{})
 	if err != nil {
 		base.Fatal(err)
 	}
@@ -84,10 +92,47 @@ func addInitData() error {
 		return err
 	}
 
+	// SettingAuditLog
+	auditLog := SettingGetAuditLogDefault()
+	err = SettingSessAdd(sess, auditLog)
+	if err != nil {
+		return err
+	}
+
+	// SettingDnsProvider
+	provider := &SettingLetsEncrypt{
+		Domain:   "vpn.xxx.com",
+		Legomail: "legomail",
+		Name:     "aliyun",
+		Renew:    false,
+		DNSProvider: DNSProvider{
+			AliYun: struct {
+				APIKey    string `json:"apiKey"`
+				SecretKey string `json:"secretKey"`
+			}{APIKey: "", SecretKey: ""},
+			TXCloud: struct {
+				SecretID  string `json:"secretId"`
+				SecretKey string `json:"secretKey"`
+			}{SecretID: "", SecretKey: ""},
+			CfCloud: struct {
+				AuthToken string `json:"authToken"`
+			}{AuthToken: ""}},
+	}
+	err = SettingSessAdd(sess, provider)
+	if err != nil {
+		return err
+	}
+	// LegoUser
+	legouser := &LegoUserData{}
+	err = SettingSessAdd(sess, legouser)
+	if err != nil {
+		return err
+	}
 	// SettingOther
 	other := &SettingOther{
 		LinkAddr:    "vpn.xx.com",
 		Banner:      "您已接入公司网络，请按照公司规定使用。\n请勿进行非工作下载及视频行为！",
+		Homeindex:   "AnyLink 是一个企业级远程办公 sslvpn 的软件，可以支持多人同时在线使用。",
 		AccountMail: accountMail,
 	}
 	err = SettingSessAdd(sess, other)
@@ -102,7 +147,24 @@ func addInitData() error {
 		return err
 	}
 
-	return sess.Commit()
+	err = sess.Commit()
+	if err != nil {
+		return err
+	}
+
+	g1 := Group{
+		Name:         "ops",
+		AllowLan:     true,
+		ClientDns:    []ValData{{Val: "114.114.114.114"}},
+		RouteInclude: []ValData{{Val: All}},
+		Status:       1,
+	}
+	err = SetGroup(&g1)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func CheckErrNotFound(err error) bool {
@@ -116,8 +178,12 @@ const accountMail = `<p>您好:</p>
     用户组: <b>{{.Group}}</b> <br/>
     用户名: <b>{{.Username}}</b> <br/>
     用户PIN码: <b>{{.PinCode}}</b> <br/>
+    <!-- 
     用户动态码(3天后失效):<br/>
     <img src="{{.OtpImg}}"/>
+    -->
+    用户动态码(请妥善保存):<br/>
+    <img src="{{.OtpImgBase64}}"/>
 </p>
 <div>
     使用说明:

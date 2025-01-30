@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -10,8 +11,9 @@ import (
 	"time"
 
 	"github.com/bjdgyc/anylink/base"
-	"github.com/bjdgyc/anylink/pkg/proxyproto"
+	"github.com/bjdgyc/anylink/dbdata"
 	"github.com/gorilla/mux"
+	"github.com/pires/go-proxyproto"
 )
 
 func startTls() {
@@ -19,11 +21,8 @@ func startTls() {
 	var (
 		err error
 
-		addr     = base.Cfg.ServerAddr
-		certFile = base.Cfg.CertFile
-		keyFile  = base.Cfg.CertKey
-		certs    = make([]tls.Certificate, 1)
-		ln       net.Listener
+		addr = base.Cfg.ServerAddr
+		ln   net.Listener
 	)
 
 	// 判断证书文件
@@ -36,23 +35,33 @@ func startTls() {
 	//	certs[0], err = tls.LoadX509KeyPair(certFile, keyFile)
 	// }
 
-	certs[0], err = tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		panic(err)
+	// 修复 CVE-2016-2183
+	// https://segmentfault.com/a/1190000038486901
+	// nmap -sV --script ssl-enum-ciphers -p 443 www.example.com
+	cipherSuites := tls.CipherSuites()
+	selectedCipherSuites := make([]uint16, 0, len(cipherSuites))
+	for _, s := range cipherSuites {
+		selectedCipherSuites = append(selectedCipherSuites, s.ID)
 	}
 
 	// 设置tls信息
 	tlsConfig := &tls.Config{
 		NextProtos:   []string{"http/1.1"},
 		MinVersion:   tls.VersionTLS12,
-		Certificates: certs,
+		CipherSuites: selectedCipherSuites,
+		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			base.Trace("GetCertificate", chi.ServerName)
+			return dbdata.GetCertificateBySNI(chi.ServerName)
+		},
 		// InsecureSkipVerify: true,
 	}
 	srv := &http.Server{
-		Addr:      addr,
-		Handler:   initRoute(),
-		TLSConfig: tlsConfig,
-		ErrorLog:  base.GetBaseLog(),
+		Addr:         addr,
+		Handler:      initRoute(),
+		TLSConfig:    tlsConfig,
+		ErrorLog:     base.GetBaseLog(),
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	}
 
 	ln, err = net.Listen("tcp", addr)
@@ -62,7 +71,10 @@ func startTls() {
 	defer ln.Close()
 
 	if base.Cfg.ProxyProtocol {
-		ln = &proxyproto.Listener{Listener: ln, ProxyHeaderTimeout: time.Second * 5}
+		ln = &proxyproto.Listener{
+			Listener:          ln,
+			ReadHeaderTimeout: 30 * time.Second,
+		}
 	}
 
 	base.Info("listen server", addr)
@@ -87,6 +99,10 @@ func initRoute() http.Handler {
 			http.FileServer(http.Dir(base.Cfg.FilesPath)),
 		),
 	)
+	// 健康检测
+	r.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}).Methods(http.MethodGet)
 	r.NotFoundHandler = http.HandlerFunc(notFound)
 	return r
 }
