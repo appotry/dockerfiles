@@ -1,0 +1,9 @@
+services:
+  vnstat-dashboard:
+    # container_name: vnstat-dashboard
+    image: stilleshan/vnstat-dashboard-kshitiz-b
+    privileged: true
+    volumes:
+        - /var/lib/vnstat:/var/lib/vnstat
+    network_mode: host
+    restart: always

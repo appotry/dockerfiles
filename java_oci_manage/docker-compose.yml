@@ -1,0 +1,10 @@
+services: 
+  oci:
+    image: stilleshan/java_oci_manage
+    container_name: rrr
+    tty: true
+    ports:
+      - 9527:9527
+    volumes:
+      - ./app:/app
+    restart: always

@@ -1,15 +1,14 @@
-FROM stilleshan/alpine-openjdk-8-headless:2021-06-11
-MAINTAINER Stille <stille@ioiox.com>
+FROM ibm-semeru-runtimes:open-8-jre
+LABEL maintainer="Stille <stille@ioiox.com>"
 
-ENV VERSION 3.2
+ENV VERSION 4.1.5
 
 WORKDIR /root
 
-RUN wget https://github.com/zhaojun1998/zfile/releases/download/${VERSION}/zfile-${VERSION}.war \
-    && mkdir zfile && unzip zfile-${VERSION}.war -d zfile && rm -rf zfile-${VERSION}.war \
-    && chmod +x ~/zfile/bin/*.sh
+RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+RUN echo 'Asia/Shanghai' >/etc/timezone
+RUN curl -L -o app.jar https://github.com/zfile-dev/zfile/releases/download/${VERSION}/zfile-${VERSION}.jar
 
 EXPOSE 8080
 
-CMD sh ./zfile/bin/start.sh && tail -f /dev/null
-
+ENTRYPOINT java $JAVA_OPTS -Xshareclasses -Xquickstart -jar /root/app.jar

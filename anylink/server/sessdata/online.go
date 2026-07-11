@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net"
 	"sort"
-	"sync/atomic"
 	"time"
 
 	"github.com/bjdgyc/anylink/pkg/utils"
@@ -15,6 +14,7 @@ type Online struct {
 	Username         string    `json:"username"`
 	Group            string    `json:"group"`
 	MacAddr          string    `json:"mac_addr"`
+	UniqueMac        bool      `json:"unique_mac"`
 	Ip               net.IP    `json:"ip"`
 	RemoteAddr       string    `json:"remote_addr"`
 	TunName          string    `json:"tun_name"`
@@ -53,14 +53,15 @@ func OnlineSess() []Online {
 				Username:         v.Username,
 				Group:            v.Group,
 				MacAddr:          v.MacAddr,
+				UniqueMac:        v.UniqueMac,
 				RemoteAddr:       v.CSess.RemoteAddr,
 				TunName:          v.CSess.IfName,
 				Mtu:              v.CSess.Mtu,
 				Client:           v.CSess.Client,
-				BandwidthUp:      utils.HumanByte(atomic.LoadUint32(&v.CSess.BandwidthUpPeriod)) + "/s",
-				BandwidthDown:    utils.HumanByte(atomic.LoadUint32(&v.CSess.BandwidthDownPeriod)) + "/s",
-				BandwidthUpAll:   utils.HumanByte(atomic.LoadUint64(&v.CSess.BandwidthUpAll)),
-				BandwidthDownAll: utils.HumanByte(atomic.LoadUint64(&v.CSess.BandwidthDownAll)),
+				BandwidthUp:      utils.HumanByte(v.CSess.BandwidthUpPeriod.Load()) + "/s",
+				BandwidthDown:    utils.HumanByte(v.CSess.BandwidthDownPeriod.Load()) + "/s",
+				BandwidthUpAll:   utils.HumanByte(v.CSess.BandwidthUpAll.Load()),
+				BandwidthDownAll: utils.HumanByte(v.CSess.BandwidthDownAll.Load()),
 				LastLogin:        v.LastLogin,
 			}
 			datas = append(datas, val)

@@ -42,6 +42,7 @@
       </template>
 
       <el-menu-item index="/admin/user/list">用户列表</el-menu-item>
+      <el-menu-item index="/admin/user/policy">用户策略</el-menu-item>
       <el-menu-item index="/admin/user/online">在线用户</el-menu-item>
       <el-menu-item index="/admin/user/ip_map">IP映射</el-menu-item>
     </el-submenu>
@@ -55,6 +56,20 @@
       <el-menu-item index="/admin/group/list">用户组列表</el-menu-item>
     </el-submenu>
 
+    <el-submenu index="4">
+      <template slot="title">
+        <i class="el-icon-s-order"></i>
+        <span slot="title">调试信息</span>
+      </template>
+
+      <el-menu-item>
+        <a href="/debug/pprof/" target="_blank">pprof</a>
+      </el-menu-item>
+      <el-menu-item>
+        <a href="/debug/statsviz/" target="_blank">statsviz</a>
+      </el-menu-item>
+
+    </el-submenu>
 
   </el-menu>
 
@@ -75,5 +90,10 @@ export default {
 <style scoped>
 .layout-menu {
   height: 100%;
+}
+
+.el-menu-item a {
+  display: block;
+  color: #fff;
 }
 </style>

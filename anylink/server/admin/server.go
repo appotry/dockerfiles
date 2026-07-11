@@ -2,11 +2,15 @@
 package admin
 
 import (
+	"crypto/tls"
 	"embed"
 	"net/http"
 	"net/http/pprof"
 
+	"github.com/arl/statsviz"
 	"github.com/bjdgyc/anylink/base"
+	"github.com/bjdgyc/anylink/dbdata"
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 )
 
@@ -17,6 +21,7 @@ func StartAdmin() {
 
 	r := mux.NewRouter()
 	r.Use(authMiddleware)
+	r.Use(handlers.CompressHandler)
 
 	// 监控检测
 	r.HandleFunc("/status.html", func(w http.ResponseWriter, r *http.Request) {
@@ -37,11 +42,19 @@ func StartAdmin() {
 	r.HandleFunc("/set/other/edit", SetOtherEdit)
 	r.HandleFunc("/set/other/smtp", SetOtherSmtp)
 	r.HandleFunc("/set/other/smtp/edit", SetOtherSmtpEdit)
+	r.HandleFunc("/set/other/audit_log", SetOtherAuditLog)
+	r.HandleFunc("/set/other/audit_log/edit", SetOtherAuditLogEdit)
 	r.HandleFunc("/set/audit/list", SetAuditList)
+	r.HandleFunc("/set/audit/export", SetAuditExport)
+	r.HandleFunc("/set/audit/act_log_list", UserActLogList)
+	r.HandleFunc("/set/other/createcert", CreatCert)
+	r.HandleFunc("/set/other/getcertset", GetCertSetting)
+	r.HandleFunc("/set/other/customcert", CustomCert)
 
 	r.HandleFunc("/user/list", UserList)
 	r.HandleFunc("/user/detail", UserDetail)
 	r.HandleFunc("/user/set", UserSet)
+	r.HandleFunc("/user/uploaduser", UserUpload).Methods(http.MethodPost)
 	r.HandleFunc("/user/del", UserDel)
 	r.HandleFunc("/user/online", UserOnline)
 	r.HandleFunc("/user/offline", UserOffline)
@@ -51,12 +64,20 @@ func StartAdmin() {
 	r.HandleFunc("/user/ip_map/detail", UserIpMapDetail)
 	r.HandleFunc("/user/ip_map/set", UserIpMapSet)
 	r.HandleFunc("/user/ip_map/del", UserIpMapDel)
+	r.HandleFunc("/user/policy/list", PolicyList)
+	r.HandleFunc("/user/policy/detail", PolicyDetail)
+	r.HandleFunc("/user/policy/set", PolicySet)
+	r.HandleFunc("/user/policy/del", PolicyDel)
 
 	r.HandleFunc("/group/list", GroupList)
 	r.HandleFunc("/group/names", GroupNames)
+	r.HandleFunc("/group/names_ids", GroupNamesIds)
 	r.HandleFunc("/group/detail", GroupDetail)
 	r.HandleFunc("/group/set", GroupSet)
 	r.HandleFunc("/group/del", GroupDel)
+	r.HandleFunc("/group/auth_login", GroupAuthLogin)
+
+	r.HandleFunc("/statsinfo/list", StatsInfoList)
 
 	// pprof
 	if base.Cfg.Pprof {
@@ -66,10 +87,41 @@ func StartAdmin() {
 		r.HandleFunc("/debug/pprof/trace", pprof.Trace).Name("debug")
 		r.HandleFunc("/debug/pprof", location("/debug/pprof/")).Name("debug")
 		r.PathPrefix("/debug/pprof/").HandlerFunc(pprof.Index).Name("debug")
+		// statsviz
+		r.Path("/debug/statsviz/ws").Name("debug").HandlerFunc(statsviz.Ws)
+		r.PathPrefix("/debug/statsviz/").Name("debug").Handler(statsviz.Index)
 	}
 
 	base.Info("Listen admin", base.Cfg.AdminAddr)
-	err := http.ListenAndServe(base.Cfg.AdminAddr, r)
+
+	// 修复 CVE-2016-2183
+	cipherSuites := tls.CipherSuites()
+	selectedCipherSuites := make([]uint16, 0, len(cipherSuites))
+	for _, s := range cipherSuites {
+		selectedCipherSuites = append(selectedCipherSuites, s.ID)
+	}
+
+	if tlscert, _, err := dbdata.ParseCert(); err != nil {
+		base.Fatal("证书加载失败", err)
+	} else {
+		dbdata.LoadCertificate(tlscert)
+	}
+
+	// 设置tls信息
+	tlsConfig := &tls.Config{
+		NextProtos:   []string{"http/1.1"},
+		MinVersion:   tls.VersionTLS12,
+		CipherSuites: selectedCipherSuites,
+		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return dbdata.GetCertificateBySNI(chi.ServerName)
+		},
+	}
+	srv := &http.Server{
+		Addr:      base.Cfg.AdminAddr,
+		Handler:   r,
+		TLSConfig: tlsConfig,
+	}
+	err := srv.ListenAndServeTLS("", "")
 	if err != nil {
 		base.Fatal(err)
 	}
